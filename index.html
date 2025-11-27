@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System 6 MIDI Backing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="window main-window">
+        <div class="title-bar">
+            <div class="close-box"></div>
+            <div class="title-bar-stripes"></div>
+            <div class="title-text">EP-133 Session Manager</div>
+            <div class="title-bar-stripes"></div>
+        </div>
+
+        <div class="content">
+            <div id="status-bar" class="status-disconnected">
+                MIDI: Disconnected
+            </div>
+
+            <div class="control-group">
+                <div class="lcd-display">
+                    <span id="current-chord-display">--</span>
+                    <span class="beat-indicator" id="beat-led">●</span>
+                </div>
+                
+                <div class="button-row">
+                    <button class="btn" id="btn-play">▶ Play</button>
+                    <button class="btn" id="btn-stop">■ Stop</button>
+                </div>
+                
+                <div class="setting-row">
+                    <label>BPM:</label>
+                    <input type="number" id="bpm-input" value="90" min="40" max="200">
+                </div>
+            </div>
+
+            <hr class="separator">
+
+            <div class="control-group">
+                <label>Chord Progression:</label>
+                <div class="help-text">Space separated (e.g. C Am F G)</div>
+                <input type="text" id="chord-input" value="C Am F G" autocomplete="off">
+            </div>
+
+            <hr class="separator">
+
+            <div class="track-settings">
+                <div class="track-col">
+                    <label>DRUMS (Ch10)</label>
+                    <select id="drum-pattern">
+                        <option value="basic">Basic Rock</option>
+                        <option value="four">Four on Floor</option>
+                        <option value="hiphop">Boom Bap</option>
+                        <option value="click">Metronome</option>
+                        <option value="mute">- MUTE -</option>
+                    </select>
+                </div>
+
+                <div class="track-col">
+                    <label>BASS (Ch11)</label>
+                    <select id="bass-pattern">
+                        <option value="root">Root Notes</option>
+                        <option value="pumping">8th Pump</option>
+                        <option value="arpeggio">Arpeggio</option>
+                        <option value="mute">- MUTE -</option>
+                    </select>
+                </div>
+
+                <div class="track-col">
+                    <label>KEYS (Ch12)</label>
+                    <select id="keys-pattern">
+                        <option value="chords">Long Chords</option>
+                        <option value="stabs">Rhythmic Stabs</option>
+                        <option value="arpeggio">Random Arp</option>
+                        <option value="mute">- MUTE -</option>
+                    </select>
+                </div>
+            </div>
+
+        </div>
+        
+        <div class="footer-bar">
+            Setup EP-133: Sys Ch:10 | Bass Ch:11 | Keys Ch:12
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
