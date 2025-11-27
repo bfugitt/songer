@@ -1,4 +1,4 @@
-// --- SYSTEM 6: MIDI + AUDIO ENGINE ---
+// --- SYSTEM 6: MIDI + AUDIO ENGINE (FIXED) ---
 
 // State
 let midiOutput = null;
@@ -25,8 +25,13 @@ const beatLed = document.getElementById('beat-led');
 // --- 1. INITIALIZATION ---
 
 async function init() {
-    // Initialize Web Audio Context (must happen after user interaction usually, handled in Play button)
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    // Initialize Web Audio Context
+    if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+    }
 
     // Initialize MIDI
     if (navigator.requestMIDIAccess) {
@@ -66,8 +71,7 @@ function playInternalKick(time) {
 }
 
 function playInternalSnare(time) {
-    // White Noise Buffer
-    const bufferSize = audioContext.sampleRate * 0.5; // 0.5 sec
+    const bufferSize = audioContext.sampleRate * 0.5;
     const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) {
@@ -136,7 +140,6 @@ function playInternalBass(freq, time, duration) {
 }
 
 function playInternalKeys(freq, time, duration) {
-    // Simple FM Bell / Rhodes-ish sound
     const carrier = audioContext.createOscillator();
     const modulator = audioContext.createOscillator();
     const modGain = audioContext.createGain();
@@ -145,20 +148,17 @@ function playInternalKeys(freq, time, duration) {
     carrier.frequency.value = freq;
     carrier.type = 'sine';
 
-    modulator.frequency.value = freq * 2; // Harmonic
+    modulator.frequency.value = freq * 2; 
     modulator.type = 'sine';
 
-    // FM wiring
     modulator.connect(modGain);
     modGain.connect(carrier.frequency);
     carrier.connect(masterGain);
     masterGain.connect(audioContext.destination);
 
-    // Envelopes
     masterGain.gain.setValueAtTime(0.3, time);
     masterGain.gain.exponentialRampToValueAtTime(0.01, time + duration);
 
-    // Mod Index Envelope (gives the "bell" ping at the start)
     modGain.gain.setValueAtTime(300, time);
     modGain.gain.exponentialRampToValueAtTime(1, time + 0.2);
 
@@ -168,9 +168,8 @@ function playInternalKeys(freq, time, duration) {
     modulator.stop(time + duration);
 }
 
-// --- 3. CORE SEQUENCER ---
+// --- 3. HELPER FUNCTIONS ---
 
-// Note Conversions
 const NOTES = { 'C':0, 'C#':1, 'Db':1, 'D':2, 'D#':3, 'Eb':3, 'E':4, 'F':5, 'F#':6, 'Gb':6, 'G':7, 'G#':8, 'Ab':8, 'A':9, 'A#':10, 'Bb':10, 'B':11 };
 
 function parseChord(chordStr) {
@@ -185,7 +184,26 @@ function mtof(noteNumber) {
     return 440 * Math.pow(2, (noteNumber - 69) / 12);
 }
 
-// Drum Patterns
+// Helper to calculate exact MIDI timestamp from AudioContext time
+function getMidiTime(audioTime) {
+    // Offset between AudioContext time and Performance.now
+    return performance.now() + (audioTime - audioContext.currentTime) * 1000;
+}
+
+// Main helper to trigger keys (handles the logic for MIDI vs Internal)
+function triggerKeyNote(note, time, duration, mode) {
+    if (mode === 'midi' && midiOutput) {
+        const timestamp = getMidiTime(time);
+        midiOutput.send([0x9B, note, 90], timestamp);
+        midiOutput.send([0x8B, note, 0], timestamp + (duration * 1000));
+    } else if (mode === 'internal') {
+        playInternalKeys(mtof(note), time, duration);
+    }
+}
+
+
+// --- 4. CORE SEQUENCER ---
+
 const DRUM_PATTERNS = {
     'basic':  [1,0,3,0, 2,0,3,0, 1,0,3,1, 2,0,3,0],
     'four':   [1,3,1,3, 1,3,1,3, 1,3,1,3, 1,3,1,3],
@@ -194,49 +212,49 @@ const DRUM_PATTERNS = {
     'mute':   [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]
 };
 
-function playStep() {
+function playStep(time) {
     const mode = document.querySelector('input[name="audioMode"]:checked').value;
-    const time = audioContext.currentTime; // Always sync to AudioContext time
     
+    // Safety check for empty chord progression
+    if (chordProgression.length === 0) return;
     const currentChord = chordProgression[currentChordIndex % chordProgression.length];
     
-    // UI Updates
-    if (currentStep === 0) lcdChord.innerText = currentChord.name;
-    beatLed.className = (currentStep % 4 === 0) ? "beat-indicator beat-active" : "beat-indicator";
+    // UI Updates (Use requestAnimationFrame for visual sync)
+    requestAnimationFrame(() => {
+        if (currentStep === 0) lcdChord.innerText = currentChord.name;
+        beatLed.className = (currentStep % 4 === 0) ? "beat-indicator beat-active" : "beat-indicator";
+    });
 
     const dStyle = document.getElementById('drum-pattern').value;
     const bStyle = document.getElementById('bass-pattern').value;
     const kStyle = document.getElementById('keys-pattern').value;
+    const midiTime = getMidiTime(time);
 
     // --- DRUMS ---
     const drumRow = DRUM_PATTERNS[dStyle] || DRUM_PATTERNS['mute'];
     const hit = drumRow[currentStep];
 
-    if (mode === 'midi' && midiOutput) {
-        if (hit === 1) midiOutput.send([0x99, 36, 100]); // Kick
-        if (hit === 2) midiOutput.send([0x99, 38, 100]); // Snare
-        if (hit === 3) midiOutput.send([0x99, 42, 80]);  // Hat
-        // Note: EP-133 needs explicit Note Offs usually, but for drum triggers usually works. 
-        // Safer to send Note Offs if your pads are set to Gate mode.
-        if (hit > 0) setTimeout(() => midiOutput.send([0x89, (hit===1?36:hit===2?38:42), 0]), 50);
-    } else if (mode === 'internal') {
-        if (hit === 1) playInternalKick(time);
-        if (hit === 2) playInternalSnare(time);
-        if (hit === 3) playInternalHat(time);
+    if (hit > 0) {
+        if (mode === 'midi' && midiOutput) {
+            let note = (hit===1 ? 36 : hit===2 ? 38 : 42);
+            midiOutput.send([0x99, note, 100], midiTime);
+            midiOutput.send([0x89, note, 0], midiTime + 50);
+        } else if (mode === 'internal') {
+            if (hit === 1) playInternalKick(time);
+            if (hit === 2) playInternalSnare(time);
+            if (hit === 3) playInternalHat(time);
+        }
     }
 
     // --- BASS ---
-    // Calculate Pitch
     let rootNote = 60 + currentChord.rootVal - 12; // C3
     if (rootNote < 48) rootNote += 12;
     if (rootNote > 72) rootNote -= 12;
     
-    // Pattern Logic
     let playBass = false;
     if (bStyle === 'root' && (currentStep === 0 || currentStep === 8)) playBass = true;
     if (bStyle === 'pumping' && (currentStep % 2 === 0)) playBass = true;
     if (bStyle === 'arpeggio' && (currentStep % 2 === 0)) {
-        // Simple arp math
         const arpPattern = [0, 0, 1, 1, 2, 2, 1, 1]; 
         const interval = currentChord.intervals[arpPattern[(currentStep/2)%8]];
         rootNote += interval;
@@ -245,44 +263,42 @@ function playStep() {
 
     if (bStyle !== 'mute' && playBass) {
         if (mode === 'midi' && midiOutput) {
-            midiOutput.send([0x9A, rootNote, 100]);
-            setTimeout(() => midiOutput.send([0x8A, rootNote, 0]), 200);
+            midiOutput.send([0x9A, rootNote, 100], midiTime);
+            midiOutput.send([0x8A, rootNote, 0], midiTime + 200);
         } else if (mode === 'internal') {
             playInternalBass(mtof(rootNote), time, 0.3);
         }
     }
 
-// --- KEYS ---
+    // --- KEYS (Fixed Logic) ---
     let keyRoot = 60 + currentChord.rootVal;
     if (keyRoot > 72) keyRoot -= 12;
 
     if (kStyle !== 'mute') {
-        // Option 1: Long Chords (Play on Step 0 only)
+        // Option 1: Long Chords
         if (kStyle === 'chords' && currentStep === 0) {
             currentChord.intervals.forEach(int => {
                 triggerKeyNote(keyRoot + int, time, 1.5, mode);
             });
         }
-        
-        // Option 2: Rhythmic Stabs (Play on beats 2 & 4 -> Steps 4 & 12)
+        // Option 2: Rhythmic Stabs (Beats 2 & 4)
         else if (kStyle === 'stabs' && (currentStep === 4 || currentStep === 12)) {
             currentChord.intervals.forEach(int => {
-                triggerKeyNote(keyRoot + int, time, 0.2, mode); // Short duration (0.2)
+                triggerKeyNote(keyRoot + int, time, 0.2, mode);
             });
         }
-
-        // Option 3: Random Arpeggio (Play random 16th notes)
+        // Option 3: Random Arpeggio
         else if (kStyle === 'arpeggio') {
-            // 60% chance to play a note on any given 16th step
             if (Math.random() > 0.4) { 
                 const interval = currentChord.intervals[Math.floor(Math.random() * currentChord.intervals.length)];
-                const octaveOffset = Math.random() > 0.8 ? 12 : 0; // Occasional high octave sparkle
+                const octaveOffset = Math.random() > 0.8 ? 12 : 0; 
                 triggerKeyNote(keyRoot + interval + octaveOffset, time, 0.2, mode);
             }
         }
     }
+}
 
-// --- 4. SCHEDULING LOOP ---
+// --- 5. SCHEDULER ---
 
 function nextNote() {
     const secondsPerBeat = 60.0 / parseInt(bpmInput.value);
@@ -296,10 +312,9 @@ function nextNote() {
 }
 
 function scheduler() {
+    // Schedule notes that fall within the lookahead window
     while (nextNoteTime < audioContext.currentTime + scheduleAheadTime) {
-        // Schedule sound slightly in future to avoid glitches
-        // For UI sync we use requestAnimationFrame or just let it trigger naturally
-        playStep(); 
+        playStep(nextNoteTime); 
         nextNote();
     }
     if (isPlaying) {
@@ -311,24 +326,29 @@ function scheduler() {
 
 document.getElementById('btn-play').addEventListener('click', () => {
     if (isPlaying) return;
-    init(); // Ensure AudioContext is ready
-    if (audioContext.state === 'suspended') audioContext.resume();
+    init(); 
 
     // Parse chords
     const rawText = chordInput.value.trim();
+    if (!rawText) return;
     chordProgression = rawText.split(/\s+/).map(c => parseChord(c));
 
     isPlaying = true;
     currentStep = 0;
     currentChordIndex = 0;
+    
+    // Start slightly in the future to avoid immediate glitches
     nextNoteTime = audioContext.currentTime + 0.1;
+    
     scheduler();
 });
 
 document.getElementById('btn-stop').addEventListener('click', () => {
     isPlaying = false;
     cancelAnimationFrame(timerID);
-    // Panic button for MIDI
+    lcdChord.innerText = "--";
+    
+    // Panic button for MIDI (Kill all sound)
     if(midiOutput) {
         for(let i=0; i<127; i++) {
             midiOutput.send([0x89, i, 0]); // Ch 10 Note Off
