@@ -252,23 +252,35 @@ function playStep() {
         }
     }
 
-    // --- KEYS ---
-    // Simple chords on beat 1
-    if (kStyle === 'chords' && currentStep === 0) {
-        let keyRoot = 60 + currentChord.rootVal;
-        if (keyRoot > 72) keyRoot -= 12;
+// --- KEYS ---
+    let keyRoot = 60 + currentChord.rootVal;
+    if (keyRoot > 72) keyRoot -= 12;
+
+    if (kStyle !== 'mute') {
+        // Option 1: Long Chords (Play on Step 0 only)
+        if (kStyle === 'chords' && currentStep === 0) {
+            currentChord.intervals.forEach(int => {
+                triggerKeyNote(keyRoot + int, time, 1.5, mode);
+            });
+        }
         
-        currentChord.intervals.forEach(int => {
-            let note = keyRoot + int;
-            if (mode === 'midi' && midiOutput) {
-                midiOutput.send([0x9B, note, 90]);
-                setTimeout(() => midiOutput.send([0x8B, note, 0]), 1000);
-            } else if (mode === 'internal') {
-                playInternalKeys(mtof(note), time, 1.5);
+        // Option 2: Rhythmic Stabs (Play on beats 2 & 4 -> Steps 4 & 12)
+        else if (kStyle === 'stabs' && (currentStep === 4 || currentStep === 12)) {
+            currentChord.intervals.forEach(int => {
+                triggerKeyNote(keyRoot + int, time, 0.2, mode); // Short duration (0.2)
+            });
+        }
+
+        // Option 3: Random Arpeggio (Play random 16th notes)
+        else if (kStyle === 'arpeggio') {
+            // 60% chance to play a note on any given 16th step
+            if (Math.random() > 0.4) { 
+                const interval = currentChord.intervals[Math.floor(Math.random() * currentChord.intervals.length)];
+                const octaveOffset = Math.random() > 0.8 ? 12 : 0; // Occasional high octave sparkle
+                triggerKeyNote(keyRoot + interval + octaveOffset, time, 0.2, mode);
             }
-        });
+        }
     }
-}
 
 // --- 4. SCHEDULING LOOP ---
 
