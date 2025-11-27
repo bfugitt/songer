@@ -1,7 +1,7 @@
-// --- SYSTEM 6: MIDI + AUDIO ENGINE (VISUAL SYNC FIXED) ---
+// --- SYSTEM 6: MIDI BROADCAST ENGINE ---
 
 // State
-let midiOutput = null;
+let midiOutputs = []; // Changed from single output to Array
 let isPlaying = false;
 let currentStep = 0; 
 let nextNoteTime = 0.0;
@@ -33,14 +33,19 @@ async function init() {
     if (navigator.requestMIDIAccess) {
         try {
             const access = await navigator.requestMIDIAccess();
-            const outputs = Array.from(access.outputs.values());
-            if(outputs.length > 0) {
-                midiOutput = outputs.find(o => o.name.includes("EP-133")) || outputs[0];
-                statusDiv.innerText = `MIDI Connected: ${midiOutput.name}`;
+            
+            // --- UPDATED: COLLECT ALL OUTPUTS ---
+            midiOutputs = Array.from(access.outputs.values());
+            
+            if(midiOutputs.length > 0) {
+                // List device names in the status bar
+                const names = midiOutputs.map(o => o.name).join(", ");
+                statusDiv.innerText = `Connected (${midiOutputs.length}): ${names}`;
                 statusDiv.className = 'status-connected';
             } else {
                 statusDiv.innerText = "No MIDI Devices Found";
             }
+            
         } catch (err) {
             console.log("MIDI Access Refused");
         }
@@ -203,33 +208,28 @@ function getMidiTime(audioTime) {
     return performance.now() + (audioTime - audioContext.currentTime) * 1000;
 }
 
+// --- UPDATED: SEND TO ALL DEVICES ---
 function triggerKeyNote(note, time, duration, mode) {
-    if (mode === 'midi' && midiOutput) {
+    if (mode === 'midi' && midiOutputs.length > 0) {
         const timestamp = getMidiTime(time);
-        midiOutput.send([0x9B, note, 90], timestamp);
-        midiOutput.send([0x8B, note, 0], timestamp + (duration * 1000));
+        
+        // Loop through ALL connected devices and send
+        midiOutputs.forEach(output => {
+            output.send([0x9B, note, 90], timestamp);
+            output.send([0x8B, note, 0], timestamp + (duration * 1000));
+        });
+
     } else if (mode === 'internal') {
         playInternalKeys(mtof(note), time, duration);
     }
 }
 
-// UI SYNC HELPER
-// This ensures the screen updates exactly when the audio is heard
 function scheduleVisualUpdate(time, chordName, stepIndex) {
-    // Calculate delay in ms between NOW and when the note plays
     const delay = (time - audioContext.currentTime) * 1000;
-    
-    // If the time is in the past (lag), run immediately, otherwise wait
     setTimeout(() => {
-        // Update Chord Text only on step 0 (Downbeat)
-        if (stepIndex === 0) {
-            lcdChord.innerText = chordName;
-        } else if (stepIndex < 0) {
-            lcdChord.innerText = "--"; // Count-in display
-        }
-
-        // Blink LED on quarter notes
-        // Normal steps (0, 4, 8, 12) OR count-in steps (-16, -12, etc)
+        if (stepIndex === 0) lcdChord.innerText = chordName;
+        else if (stepIndex < 0) lcdChord.innerText = "--";
+        
         if (Math.abs(stepIndex) % 4 === 0) {
             beatLed.className = "beat-indicator beat-active";
         } else {
@@ -252,9 +252,7 @@ const DRUM_PATTERNS = {
 function playStep(time) {
     const mode = document.querySelector('input[name="audioMode"]:checked').value;
     
-    // CAPTURE CURRENT STATE LOCALLY FOR UI SYNC
     const capturedStep = currentStep;
-    // Safety check for chord availability
     let capturedChordName = "--";
     let currentChord = null;
     if (chordProgression.length > 0) {
@@ -262,10 +260,8 @@ function playStep(time) {
         capturedChordName = currentChord.name;
     }
 
-    // SCHEDULE THE VISUAL UPDATE
     scheduleVisualUpdate(time, capturedChordName, capturedStep);
 
-    // --- COUNT-IN PHASE ---
     if (capturedStep < 0) {
         const relativeStep = capturedStep + 16;
         if (relativeStep % 4 === 0) {
@@ -274,7 +270,6 @@ function playStep(time) {
         return;
     }
 
-    // --- NORMAL PLAYBACK ---
     if (!currentChord) return;
 
     const dStyle = document.getElementById('drum-pattern').value;
@@ -287,10 +282,13 @@ function playStep(time) {
     const hit = drumRow[capturedStep];
 
     if (hit > 0) {
-        if (mode === 'midi' && midiOutput) {
+        if (mode === 'midi' && midiOutputs.length > 0) {
             let note = (hit===1 ? 36 : hit===2 ? 38 : 42);
-            midiOutput.send([0x99, note, 100], midiTime);
-            midiOutput.send([0x89, note, 0], midiTime + 50);
+            // Broadcast
+            midiOutputs.forEach(output => {
+                output.send([0x99, note, 100], midiTime);
+                output.send([0x89, note, 0], midiTime + 50);
+            });
         } else if (mode === 'internal') {
             if (hit === 1) playInternalKick(time);
             if (hit === 2) playInternalSnare(time);
@@ -314,9 +312,12 @@ function playStep(time) {
     }
 
     if (bStyle !== 'mute' && playBass) {
-        if (mode === 'midi' && midiOutput) {
-            midiOutput.send([0x9A, rootNote, 100], midiTime);
-            midiOutput.send([0x8A, rootNote, 0], midiTime + 200);
+        if (mode === 'midi' && midiOutputs.length > 0) {
+            // Broadcast
+            midiOutputs.forEach(output => {
+                output.send([0x9A, rootNote, 100], midiTime);
+                output.send([0x8A, rootNote, 0], midiTime + 200);
+            });
         } else if (mode === 'internal') {
             playInternalBass(mtof(rootNote), time, 0.3);
         }
@@ -376,7 +377,6 @@ function scheduler() {
 document.getElementById('btn-play').addEventListener('click', async () => {
     if (isPlaying) return;
     
-    // iOS Unlock
     if (!audioContext) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
     }
@@ -397,8 +397,6 @@ document.getElementById('btn-play').addEventListener('click', async () => {
     chordProgression = rawText.split(/\s+/).map(c => parseChord(c));
 
     isPlaying = true;
-    
-    // Start 1 bar (16 steps) early for Count-In
     currentStep = -16;
     currentChordIndex = 0;
     
@@ -415,12 +413,14 @@ document.getElementById('btn-stop').addEventListener('click', () => {
     lcdChord.innerText = "--";
     beatLed.className = "beat-indicator";
     
-    // MIDI Panic
-    if(midiOutput) {
-        for(let i=0; i<127; i++) {
-            midiOutput.send([0x89, i, 0]); 
-            midiOutput.send([0x8A, i, 0]); 
-            midiOutput.send([0x8B, i, 0]); 
-        }
+    // MIDI Panic - Send to all devices
+    if(midiOutputs.length > 0) {
+        midiOutputs.forEach(output => {
+            for(let i=0; i<127; i++) {
+                output.send([0x89, i, 0]); 
+                output.send([0x8A, i, 0]); 
+                output.send([0x8B, i, 0]); 
+            }
+        });
     }
 });
