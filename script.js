@@ -1,4 +1,4 @@
-// --- SYSTEM 6: MIDI + AUDIO ENGINE + WAKE LOCK ---
+// --- SYSTEM 6: MIDI + AUDIO ENGINE (VISUAL SYNC FIXED) ---
 
 // State
 let midiOutput = null;
@@ -9,7 +9,7 @@ let timerID = null;
 let lookahead = 25.0; 
 let scheduleAheadTime = 0.1; 
 let audioContext = null;
-let wakeLock = null; // To keep phone screen on
+let wakeLock = null;
 
 // Musical Data
 let currentChordIndex = 0;
@@ -26,12 +26,10 @@ const beatLed = document.getElementById('beat-led');
 // --- 1. INITIALIZATION & WAKE LOCK ---
 
 async function init() {
-    // 1. Audio Context Check
     if (!audioContext) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
     }
 
-    // 2. MIDI Initialization
     if (navigator.requestMIDIAccess) {
         try {
             const access = await navigator.requestMIDIAccess();
@@ -49,43 +47,31 @@ async function init() {
     }
 }
 
-// Function to keep iPhone screen awake
 async function requestWakeLock() {
     if ('wakeLock' in navigator) {
         try {
             wakeLock = await navigator.wakeLock.request('screen');
-            console.log('Screen Wake Lock Active');
-        } catch (err) {
-            console.log(`${err.name}, ${err.message}`);
-        }
+        } catch (err) { console.log(err); }
     }
 }
 
 function releaseWakeLock() {
     if (wakeLock !== null) {
-        wakeLock.release().then(() => {
-            wakeLock = null;
-            console.log('Screen Wake Lock Released');
-        });
+        wakeLock.release().then(() => wakeLock = null);
     }
 }
 
-// --- 2. INTERNAL SYNTH ENGINE (Web Audio API) ---
+// --- 2. INTERNAL SYNTH ENGINE ---
 
 function playMetronomeClick(time, isDownbeat) {
     const osc = audioContext.createOscillator();
     const gain = audioContext.createGain();
-    
     osc.connect(gain);
     gain.connect(audioContext.destination);
-
-    // High pitch for "1", Low pitch for "2,3,4"
     osc.frequency.value = isDownbeat ? 1200 : 800; 
     osc.type = 'square';
-
     gain.gain.setValueAtTime(0.3, time);
     gain.gain.exponentialRampToValueAtTime(0.01, time + 0.1);
-
     osc.start(time);
     osc.stop(time + 0.1);
 }
@@ -203,7 +189,6 @@ function parseChord(chordStr) {
         quality = 'min';
     }
     
-    // Build Display Name (First char Caps, rest lower)
     let displayName = rootKey + extension;
     let intervals = (quality === 'min') ? [0, 3, 7] : [0, 4, 7];
     
@@ -228,6 +213,31 @@ function triggerKeyNote(note, time, duration, mode) {
     }
 }
 
+// UI SYNC HELPER
+// This ensures the screen updates exactly when the audio is heard
+function scheduleVisualUpdate(time, chordName, stepIndex) {
+    // Calculate delay in ms between NOW and when the note plays
+    const delay = (time - audioContext.currentTime) * 1000;
+    
+    // If the time is in the past (lag), run immediately, otherwise wait
+    setTimeout(() => {
+        // Update Chord Text only on step 0 (Downbeat)
+        if (stepIndex === 0) {
+            lcdChord.innerText = chordName;
+        } else if (stepIndex < 0) {
+            lcdChord.innerText = "--"; // Count-in display
+        }
+
+        // Blink LED on quarter notes
+        // Normal steps (0, 4, 8, 12) OR count-in steps (-16, -12, etc)
+        if (Math.abs(stepIndex) % 4 === 0) {
+            beatLed.className = "beat-indicator beat-active";
+        } else {
+            beatLed.className = "beat-indicator";
+        }
+    }, Math.max(0, delay)); 
+}
+
 
 // --- 4. CORE SEQUENCER ---
 
@@ -242,31 +252,30 @@ const DRUM_PATTERNS = {
 function playStep(time) {
     const mode = document.querySelector('input[name="audioMode"]:checked').value;
     
-    // --- COUNT-IN PHASE (Negative Steps) ---
-    if (currentStep < 0) {
-        // Blink the LED on beat
-        const relativeStep = currentStep + 16; // 0 to 15
-        requestAnimationFrame(() => {
-            beatLed.className = (relativeStep % 4 === 0) ? "beat-indicator beat-active" : "beat-indicator";
-            lcdChord.innerText = "--"; // Show waiting state
-        });
+    // CAPTURE CURRENT STATE LOCALLY FOR UI SYNC
+    const capturedStep = currentStep;
+    // Safety check for chord availability
+    let capturedChordName = "--";
+    let currentChord = null;
+    if (chordProgression.length > 0) {
+        currentChord = chordProgression[currentChordIndex % chordProgression.length];
+        capturedChordName = currentChord.name;
+    }
 
-        // Play Click on quarter notes
+    // SCHEDULE THE VISUAL UPDATE
+    scheduleVisualUpdate(time, capturedChordName, capturedStep);
+
+    // --- COUNT-IN PHASE ---
+    if (capturedStep < 0) {
+        const relativeStep = capturedStep + 16;
         if (relativeStep % 4 === 0) {
-            // Is it the "One"?
             playMetronomeClick(time, relativeStep === 0);
         }
-        return; // Don't play instruments yet
+        return;
     }
 
     // --- NORMAL PLAYBACK ---
-    if (chordProgression.length === 0) return;
-    const currentChord = chordProgression[currentChordIndex % chordProgression.length];
-    
-    requestAnimationFrame(() => {
-        if (currentStep === 0) lcdChord.innerText = currentChord.name;
-        beatLed.className = (currentStep % 4 === 0) ? "beat-indicator beat-active" : "beat-indicator";
-    });
+    if (!currentChord) return;
 
     const dStyle = document.getElementById('drum-pattern').value;
     const bStyle = document.getElementById('bass-pattern').value;
@@ -275,7 +284,7 @@ function playStep(time) {
 
     // --- DRUMS ---
     const drumRow = DRUM_PATTERNS[dStyle] || DRUM_PATTERNS['mute'];
-    const hit = drumRow[currentStep];
+    const hit = drumRow[capturedStep];
 
     if (hit > 0) {
         if (mode === 'midi' && midiOutput) {
@@ -290,16 +299,16 @@ function playStep(time) {
     }
 
     // --- BASS ---
-    let rootNote = 60 + currentChord.rootVal - 12; // C3
+    let rootNote = 60 + currentChord.rootVal - 12; 
     if (rootNote < 48) rootNote += 12;
     if (rootNote > 72) rootNote -= 12;
     
     let playBass = false;
-    if (bStyle === 'root' && (currentStep === 0 || currentStep === 8)) playBass = true;
-    if (bStyle === 'pumping' && (currentStep % 2 === 0)) playBass = true;
-    if (bStyle === 'arpeggio' && (currentStep % 2 === 0)) {
+    if (bStyle === 'root' && (capturedStep === 0 || capturedStep === 8)) playBass = true;
+    if (bStyle === 'pumping' && (capturedStep % 2 === 0)) playBass = true;
+    if (bStyle === 'arpeggio' && (capturedStep % 2 === 0)) {
         const arpPattern = [0, 0, 1, 1, 2, 2, 1, 1]; 
-        const interval = currentChord.intervals[arpPattern[(currentStep/2)%8]];
+        const interval = currentChord.intervals[arpPattern[(capturedStep/2)%8]];
         rootNote += interval;
         playBass = true;
     }
@@ -318,12 +327,12 @@ function playStep(time) {
     if (keyRoot > 72) keyRoot -= 12;
 
     if (kStyle !== 'mute') {
-        if (kStyle === 'chords' && currentStep === 0) {
+        if (kStyle === 'chords' && capturedStep === 0) {
             currentChord.intervals.forEach(int => {
                 triggerKeyNote(keyRoot + int, time, 1.5, mode);
             });
         }
-        else if (kStyle === 'stabs' && (currentStep === 4 || currentStep === 12)) {
+        else if (kStyle === 'stabs' && (capturedStep === 4 || capturedStep === 12)) {
             currentChord.intervals.forEach(int => {
                 triggerKeyNote(keyRoot + int, time, 0.2, mode);
             });
@@ -346,7 +355,6 @@ function nextNote() {
     nextNoteTime += secondsPerStep; 
     currentStep++;
     
-    // Normal Loop: 0 -> 15 -> 0
     if (currentStep === STEPS_PER_BAR) {
         currentStep = 0;
         currentChordIndex++;
@@ -375,30 +383,25 @@ document.getElementById('btn-play').addEventListener('click', async () => {
     if (audioContext.state === 'suspended') {
         await audioContext.resume();
     }
-    // Silent buffer to force audio hardware
     const buffer = audioContext.createBuffer(1, 1, 22050);
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
     source.connect(audioContext.destination);
     source.start(0);
 
-    // Request Screen Stay Awake
     requestWakeLock();
-
     init(); 
 
-    // Parse chords
     const rawText = chordInput.value.trim();
     if (!rawText) return;
     chordProgression = rawText.split(/\s+/).map(c => parseChord(c));
 
     isPlaying = true;
     
-    // Start with 1 bar of Count-In (-16 steps)
+    // Start 1 bar (16 steps) early for Count-In
     currentStep = -16;
     currentChordIndex = 0;
     
-    // Start slightly in the future
     nextNoteTime = audioContext.currentTime + 0.1;
     
     scheduler();
@@ -407,12 +410,12 @@ document.getElementById('btn-play').addEventListener('click', async () => {
 document.getElementById('btn-stop').addEventListener('click', () => {
     isPlaying = false;
     cancelAnimationFrame(timerID);
-    releaseWakeLock(); // Let phone sleep again
+    releaseWakeLock(); 
     
     lcdChord.innerText = "--";
     beatLed.className = "beat-indicator";
     
-    // Panic button
+    // MIDI Panic
     if(midiOutput) {
         for(let i=0; i<127; i++) {
             midiOutput.send([0x89, i, 0]); 
