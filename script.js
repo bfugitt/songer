@@ -1,4 +1,4 @@
-// --- SYSTEM 6: MIDI + AUDIO ENGINE (FIXED) ---
+// --- SYSTEM 6: MIDI + AUDIO ENGINE (iOS READY) ---
 
 // State
 let midiOutput = null;
@@ -25,20 +25,19 @@ const beatLed = document.getElementById('beat-led');
 // --- 1. INITIALIZATION ---
 
 async function init() {
-    // Initialize Web Audio Context
+    // 1. Audio Context Check
+    // We only create it here if it wasn't already created by the button click
     if (!audioContext) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
     }
-    if (audioContext.state === 'suspended') {
-        await audioContext.resume();
-    }
 
-    // Initialize MIDI
+    // 2. MIDI Initialization
     if (navigator.requestMIDIAccess) {
         try {
             const access = await navigator.requestMIDIAccess();
             const outputs = Array.from(access.outputs.values());
             if(outputs.length > 0) {
+                // Prefer EP-133, otherwise take the first available
                 midiOutput = outputs.find(o => o.name.includes("EP-133")) || outputs[0];
                 statusDiv.innerText = `MIDI Connected: ${midiOutput.name}`;
                 statusDiv.className = 'status-connected';
@@ -46,7 +45,7 @@ async function init() {
                 statusDiv.innerText = "No MIDI Devices Found";
             }
         } catch (err) {
-            console.log("MIDI Access Refused");
+            console.log("MIDI Access Refused or Not Supported");
         }
     }
 }
@@ -140,6 +139,7 @@ function playInternalBass(freq, time, duration) {
 }
 
 function playInternalKeys(freq, time, duration) {
+    // Simple FM Bell / Rhodes-ish sound
     const carrier = audioContext.createOscillator();
     const modulator = audioContext.createOscillator();
     const modGain = audioContext.createGain();
@@ -184,13 +184,11 @@ function mtof(noteNumber) {
     return 440 * Math.pow(2, (noteNumber - 69) / 12);
 }
 
-// Helper to calculate exact MIDI timestamp from AudioContext time
 function getMidiTime(audioTime) {
-    // Offset between AudioContext time and Performance.now
+    // Sync MIDI timestamp to AudioContext time
     return performance.now() + (audioTime - audioContext.currentTime) * 1000;
 }
 
-// Main helper to trigger keys (handles the logic for MIDI vs Internal)
 function triggerKeyNote(note, time, duration, mode) {
     if (mode === 'midi' && midiOutput) {
         const timestamp = getMidiTime(time);
@@ -215,11 +213,10 @@ const DRUM_PATTERNS = {
 function playStep(time) {
     const mode = document.querySelector('input[name="audioMode"]:checked').value;
     
-    // Safety check for empty chord progression
     if (chordProgression.length === 0) return;
     const currentChord = chordProgression[currentChordIndex % chordProgression.length];
     
-    // UI Updates (Use requestAnimationFrame for visual sync)
+    // UI Updates (Synced to Animation Frame)
     requestAnimationFrame(() => {
         if (currentStep === 0) lcdChord.innerText = currentChord.name;
         beatLed.className = (currentStep % 4 === 0) ? "beat-indicator beat-active" : "beat-indicator";
@@ -270,7 +267,7 @@ function playStep(time) {
         }
     }
 
-    // --- KEYS (Fixed Logic) ---
+    // --- KEYS ---
     let keyRoot = 60 + currentChord.rootVal;
     if (keyRoot > 72) keyRoot -= 12;
 
@@ -281,7 +278,7 @@ function playStep(time) {
                 triggerKeyNote(keyRoot + int, time, 1.5, mode);
             });
         }
-        // Option 2: Rhythmic Stabs (Beats 2 & 4)
+        // Option 2: Rhythmic Stabs
         else if (kStyle === 'stabs' && (currentStep === 4 || currentStep === 12)) {
             currentChord.intervals.forEach(int => {
                 triggerKeyNote(keyRoot + int, time, 0.2, mode);
@@ -312,7 +309,7 @@ function nextNote() {
 }
 
 function scheduler() {
-    // Schedule notes that fall within the lookahead window
+    // Schedule ahead
     while (nextNoteTime < audioContext.currentTime + scheduleAheadTime) {
         playStep(nextNoteTime); 
         nextNote();
@@ -322,10 +319,32 @@ function scheduler() {
     }
 }
 
-// --- CONTROLS ---
+// --- 6. CONTROLS (With iOS Fix) ---
 
-document.getElementById('btn-play').addEventListener('click', () => {
+document.getElementById('btn-play').addEventListener('click', async () => {
     if (isPlaying) return;
+    
+    // --- iOS UNLOCK SEQUENCE ---
+    // 1. Create context immediately (synchronously)
+    if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    // 2. Force resume immediately
+    if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+    }
+
+    // 3. Play a silent "dummy" note instantly
+    // This tells iOS "Yes, the user really wants audio right now"
+    const buffer = audioContext.createBuffer(1, 1, 22050);
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioContext.destination);
+    source.start(0);
+    // --- END iOS UNLOCK ---
+
+    // Now safe to init MIDI and start
     init(); 
 
     // Parse chords
@@ -337,7 +356,7 @@ document.getElementById('btn-play').addEventListener('click', () => {
     currentStep = 0;
     currentChordIndex = 0;
     
-    // Start slightly in the future to avoid immediate glitches
+    // Start slightly in the future
     nextNoteTime = audioContext.currentTime + 0.1;
     
     scheduler();
@@ -347,6 +366,7 @@ document.getElementById('btn-stop').addEventListener('click', () => {
     isPlaying = false;
     cancelAnimationFrame(timerID);
     lcdChord.innerText = "--";
+    beatLed.className = "beat-indicator";
     
     // Panic button for MIDI (Kill all sound)
     if(midiOutput) {
