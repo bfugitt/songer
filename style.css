@@ -1,0 +1,133 @@
+/* Base System 6 Styling */
+body {
+    font-family: 'VT323', monospace;
+    background-color: #f0f0f0;
+    /* Classic Mac Dither Pattern */
+    background-image: linear-gradient(45deg, #ccc 25%, transparent 25%), 
+                      linear-gradient(-45deg, #ccc 25%, transparent 25%), 
+                      linear-gradient(45deg, transparent 75%, #ccc 75%), 
+                      linear-gradient(-45deg, transparent 75%, #ccc 75%);
+    background-size: 4px 4px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+}
+
+.window {
+    width: 100%;
+    max-width: 440px;
+    background-color: #fff;
+    border: 2px solid #000;
+    box-shadow: 6px 6px 0px #000;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+/* Title Bar */
+.title-bar {
+    background-color: #fff;
+    border-bottom: 2px solid #000;
+    padding: 4px 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    user-select: none;
+    height: 24px;
+}
+
+.title-bar-stripes {
+    flex-grow: 1;
+    background-image: repeating-linear-gradient(to bottom, #000, #000 2px, #fff 2px, #fff 4px);
+    height: 14px;
+    margin: 0 8px;
+}
+
+.close-box {
+    width: 14px;
+    height: 14px;
+    border: 2px solid #000;
+    background: #fff;
+    box-shadow: inset 2px 2px 0 #fff; /* fake bevel */
+}
+
+/* Content Area */
+.content {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+/* Controls */
+.btn {
+    font-family: 'VT323', monospace;
+    font-size: 22px;
+    background-color: #fff;
+    border: 2px solid #000;
+    padding: 8px 24px;
+    box-shadow: 3px 3px 0px #000;
+    cursor: pointer;
+    min-width: 100px;
+}
+
+.btn:active {
+    box-shadow: 1px 1px 0px #000;
+    transform: translate(2px, 2px);
+}
+
+#btn-play { background-color: #e6ffe6; }
+#btn-stop { background-color: #ffe6e6; }
+
+/* Inputs and Selects */
+input[type="text"], input[type="number"], select {
+    font-family: 'VT323', monospace;
+    font-size: 20px;
+    border: 2px solid #000;
+    padding: 4px;
+    background: #fff;
+    outline: none;
+}
+
+input[type="text"] { width: 100%; box-sizing: border-box; font-size: 24px; text-transform: uppercase;}
+
+/* LCD Display Area */
+.lcd-display {
+    background-color: #000;
+    color: #33ff33; /* Retro green terminal color */
+    padding: 10px;
+    font-size: 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border: 2px solid #888;
+    margin-bottom: 10px;
+    font-family: monospace; /* Monospaced for LCD look */
+}
+
+.beat-indicator { opacity: 0.2; }
+.beat-active { opacity: 1; }
+
+.status-disconnected { background: #eee; border: 1px dashed #000; padding: 5px; text-align: center; }
+.status-connected { background: #ccffcc; border: 1px solid #000; padding: 5px; text-align: center; }
+
+/* Grid Layouts */
+.button-row { display: flex; gap: 10px; margin-bottom: 10px; justify-content: center;}
+.setting-row { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 22px; }
+.track-settings { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.track-col { display: flex; flex-direction: column; gap: 5px; }
+.track-col label { font-size: 18px; text-align: center; font-weight: bold; border-bottom: 2px solid #000; margin-bottom: 5px;}
+.track-col select { width: 100%; }
+
+.separator { border: 0; border-top: 2px solid #000; width: 100%; margin: 5px 0; }
+.help-text { font-size: 16px; color: #666; margin-bottom: 4px; }
+
+.footer-bar {
+    background: #eee;
+    border-top: 2px solid #000;
+    padding: 5px;
+    text-align: center;
+    font-size: 16px;
+}
