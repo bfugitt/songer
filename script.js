@@ -1,4 +1,4 @@
-// --- SYSTEM 6: MIDI + AUDIO ENGINE (iOS READY) ---
+// --- SYSTEM 6: MIDI + AUDIO ENGINE + WAKE LOCK ---
 
 // State
 let midiOutput = null;
@@ -9,6 +9,7 @@ let timerID = null;
 let lookahead = 25.0; 
 let scheduleAheadTime = 0.1; 
 let audioContext = null;
+let wakeLock = null; // To keep phone screen on
 
 // Musical Data
 let currentChordIndex = 0;
@@ -22,11 +23,10 @@ const statusDiv = document.getElementById('status-bar');
 const lcdChord = document.getElementById('current-chord-display');
 const beatLed = document.getElementById('beat-led');
 
-// --- 1. INITIALIZATION ---
+// --- 1. INITIALIZATION & WAKE LOCK ---
 
 async function init() {
     // 1. Audio Context Check
-    // We only create it here if it wasn't already created by the button click
     if (!audioContext) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
     }
@@ -37,7 +37,6 @@ async function init() {
             const access = await navigator.requestMIDIAccess();
             const outputs = Array.from(access.outputs.values());
             if(outputs.length > 0) {
-                // Prefer EP-133, otherwise take the first available
                 midiOutput = outputs.find(o => o.name.includes("EP-133")) || outputs[0];
                 statusDiv.innerText = `MIDI Connected: ${midiOutput.name}`;
                 statusDiv.className = 'status-connected';
@@ -45,26 +44,61 @@ async function init() {
                 statusDiv.innerText = "No MIDI Devices Found";
             }
         } catch (err) {
-            console.log("MIDI Access Refused or Not Supported");
+            console.log("MIDI Access Refused");
         }
+    }
+}
+
+// Function to keep iPhone screen awake
+async function requestWakeLock() {
+    if ('wakeLock' in navigator) {
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('Screen Wake Lock Active');
+        } catch (err) {
+            console.log(`${err.name}, ${err.message}`);
+        }
+    }
+}
+
+function releaseWakeLock() {
+    if (wakeLock !== null) {
+        wakeLock.release().then(() => {
+            wakeLock = null;
+            console.log('Screen Wake Lock Released');
+        });
     }
 }
 
 // --- 2. INTERNAL SYNTH ENGINE (Web Audio API) ---
 
-function playInternalKick(time) {
+function playMetronomeClick(time, isDownbeat) {
     const osc = audioContext.createOscillator();
     const gain = audioContext.createGain();
     
     osc.connect(gain);
     gain.connect(audioContext.destination);
 
+    // High pitch for "1", Low pitch for "2,3,4"
+    osc.frequency.value = isDownbeat ? 1200 : 800; 
+    osc.type = 'square';
+
+    gain.gain.setValueAtTime(0.3, time);
+    gain.gain.exponentialRampToValueAtTime(0.01, time + 0.1);
+
+    osc.start(time);
+    osc.stop(time + 0.1);
+}
+
+function playInternalKick(time) {
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    osc.connect(gain);
+    gain.connect(audioContext.destination);
     osc.frequency.setValueAtTime(150, time);
     osc.frequency.exponentialRampToValueAtTime(0.01, time + 0.5);
-
     gain.gain.setValueAtTime(1, time);
     gain.gain.exponentialRampToValueAtTime(0.01, time + 0.5);
-
     osc.start(time);
     osc.stop(time + 0.5);
 }
@@ -73,25 +107,18 @@ function playInternalSnare(time) {
     const bufferSize = audioContext.sampleRate * 0.5;
     const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
     const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-        data[i] = Math.random() * 2 - 1;
-    }
-
+    for (let i = 0; i < bufferSize; i++) { data[i] = Math.random() * 2 - 1; }
     const noise = audioContext.createBufferSource();
     noise.buffer = buffer;
-    
     const noiseFilter = audioContext.createBiquadFilter();
     noiseFilter.type = 'highpass';
     noiseFilter.frequency.value = 1000;
-
     const noiseEnvelope = audioContext.createGain();
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseEnvelope);
     noiseEnvelope.connect(audioContext.destination);
-
     noiseEnvelope.gain.setValueAtTime(1, time);
     noiseEnvelope.gain.exponentialRampToValueAtTime(0.01, time + 0.2);
-
     noise.start(time);
 }
 
@@ -99,69 +126,51 @@ function playInternalHat(time) {
     const bufferSize = audioContext.sampleRate * 0.1;
     const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
     const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-        data[i] = Math.random() * 2 - 1;
-    }
-
+    for (let i = 0; i < bufferSize; i++) { data[i] = Math.random() * 2 - 1; }
     const noise = audioContext.createBufferSource();
     noise.buffer = buffer;
-
     const filter = audioContext.createBiquadFilter();
     filter.type = 'highpass';
     filter.frequency.value = 5000;
-
     const gain = audioContext.createGain();
     noise.connect(filter);
     filter.connect(gain);
     gain.connect(audioContext.destination);
-
     gain.gain.setValueAtTime(0.3, time);
     gain.gain.exponentialRampToValueAtTime(0.01, time + 0.05);
-
     noise.start(time);
 }
 
 function playInternalBass(freq, time, duration) {
     const osc = audioContext.createOscillator();
     const gain = audioContext.createGain();
-    
     osc.type = 'triangle';
     osc.frequency.value = freq;
-    
     osc.connect(gain);
     gain.connect(audioContext.destination);
-
     gain.gain.setValueAtTime(0.6, time);
     gain.gain.linearRampToValueAtTime(0, time + duration);
-
     osc.start(time);
     osc.stop(time + duration);
 }
 
 function playInternalKeys(freq, time, duration) {
-    // Simple FM Bell / Rhodes-ish sound
     const carrier = audioContext.createOscillator();
     const modulator = audioContext.createOscillator();
     const modGain = audioContext.createGain();
     const masterGain = audioContext.createGain();
-
     carrier.frequency.value = freq;
     carrier.type = 'sine';
-
     modulator.frequency.value = freq * 2; 
     modulator.type = 'sine';
-
     modulator.connect(modGain);
     modGain.connect(carrier.frequency);
     carrier.connect(masterGain);
     masterGain.connect(audioContext.destination);
-
     masterGain.gain.setValueAtTime(0.3, time);
     masterGain.gain.exponentialRampToValueAtTime(0.01, time + duration);
-
     modGain.gain.setValueAtTime(300, time);
     modGain.gain.exponentialRampToValueAtTime(1, time + 0.2);
-
     carrier.start(time);
     modulator.start(time);
     carrier.stop(time + duration);
@@ -173,54 +182,39 @@ function playInternalKeys(freq, time, duration) {
 const NOTES = { 'C':0, 'C#':1, 'Db':1, 'D':2, 'D#':3, 'Eb':3, 'E':4, 'F':5, 'F#':6, 'Gb':6, 'G':7, 'G#':8, 'Ab':8, 'A':9, 'A#':10, 'Bb':10, 'B':11 };
 
 function parseChord(chordStr) {
-    // 1. Identify Root Length (1 or 2 chars, e.g. "C" or "F#")
     let rootLen = 1;
     if (chordStr.length > 1) {
         const c2 = chordStr[1];
-        // Check for sharp (#) or flat (b/B)
         if (c2 === '#' || c2.toLowerCase() === 'b') { 
             rootLen = 2;
         }
     }
-
-    // 2. Normalize the Root (Force "a" -> "A", "bb" -> "Bb")
     let rootRaw = chordStr.substring(0, rootLen);
     let rootKey = rootRaw.charAt(0).toUpperCase();
     if (rootLen > 1) {
-        rootKey += rootRaw.charAt(1).toLowerCase(); // Ensures "b" is lower for flat
+        rootKey += rootRaw.charAt(1).toLowerCase(); 
     }
-
-    // 3. Lookup Root Value
     let rootVal = NOTES[rootKey];
-    if (rootVal === undefined) {
-        // Fallback for typos, just plays C so it doesn't crash
-        rootVal = 0; 
-    }
+    if (rootVal === undefined) rootVal = 0; 
 
-    // 4. Determine Quality (Major/Minor)
-    // Check the REST of the string for 'm'
     let extension = chordStr.substring(rootLen).toLowerCase();
     let quality = 'maj';
-    
-    // If it contains 'm' (and not 'maj'), it is Minor
     if (extension.includes('m') && !extension.includes('maj')) {
         quality = 'min';
     }
-
-    // 5. Build Clean Display Name (e.g. "Am", "F#m")
-    // This fixes the lowercase display issue in the black box
+    
+    // Build Display Name (First char Caps, rest lower)
     let displayName = rootKey + extension;
-
     let intervals = (quality === 'min') ? [0, 3, 7] : [0, 4, 7];
     
     return { name: displayName, rootVal: rootVal, intervals: intervals };
 }
+
 function mtof(noteNumber) {
     return 440 * Math.pow(2, (noteNumber - 69) / 12);
 }
 
 function getMidiTime(audioTime) {
-    // Sync MIDI timestamp to AudioContext time
     return performance.now() + (audioTime - audioContext.currentTime) * 1000;
 }
 
@@ -248,10 +242,27 @@ const DRUM_PATTERNS = {
 function playStep(time) {
     const mode = document.querySelector('input[name="audioMode"]:checked').value;
     
+    // --- COUNT-IN PHASE (Negative Steps) ---
+    if (currentStep < 0) {
+        // Blink the LED on beat
+        const relativeStep = currentStep + 16; // 0 to 15
+        requestAnimationFrame(() => {
+            beatLed.className = (relativeStep % 4 === 0) ? "beat-indicator beat-active" : "beat-indicator";
+            lcdChord.innerText = "--"; // Show waiting state
+        });
+
+        // Play Click on quarter notes
+        if (relativeStep % 4 === 0) {
+            // Is it the "One"?
+            playMetronomeClick(time, relativeStep === 0);
+        }
+        return; // Don't play instruments yet
+    }
+
+    // --- NORMAL PLAYBACK ---
     if (chordProgression.length === 0) return;
     const currentChord = chordProgression[currentChordIndex % chordProgression.length];
     
-    // UI Updates (Synced to Animation Frame)
     requestAnimationFrame(() => {
         if (currentStep === 0) lcdChord.innerText = currentChord.name;
         beatLed.className = (currentStep % 4 === 0) ? "beat-indicator beat-active" : "beat-indicator";
@@ -307,19 +318,16 @@ function playStep(time) {
     if (keyRoot > 72) keyRoot -= 12;
 
     if (kStyle !== 'mute') {
-        // Option 1: Long Chords
         if (kStyle === 'chords' && currentStep === 0) {
             currentChord.intervals.forEach(int => {
                 triggerKeyNote(keyRoot + int, time, 1.5, mode);
             });
         }
-        // Option 2: Rhythmic Stabs
         else if (kStyle === 'stabs' && (currentStep === 4 || currentStep === 12)) {
             currentChord.intervals.forEach(int => {
                 triggerKeyNote(keyRoot + int, time, 0.2, mode);
             });
         }
-        // Option 3: Random Arpeggio
         else if (kStyle === 'arpeggio') {
             if (Math.random() > 0.4) { 
                 const interval = currentChord.intervals[Math.floor(Math.random() * currentChord.intervals.length)];
@@ -337,6 +345,8 @@ function nextNote() {
     const secondsPerStep = secondsPerBeat / 4; 
     nextNoteTime += secondsPerStep; 
     currentStep++;
+    
+    // Normal Loop: 0 -> 15 -> 0
     if (currentStep === STEPS_PER_BAR) {
         currentStep = 0;
         currentChordIndex++;
@@ -344,7 +354,6 @@ function nextNote() {
 }
 
 function scheduler() {
-    // Schedule ahead
     while (nextNoteTime < audioContext.currentTime + scheduleAheadTime) {
         playStep(nextNoteTime); 
         nextNote();
@@ -354,32 +363,28 @@ function scheduler() {
     }
 }
 
-// --- 6. CONTROLS (With iOS Fix) ---
+// --- 6. CONTROLS ---
 
 document.getElementById('btn-play').addEventListener('click', async () => {
     if (isPlaying) return;
     
-    // --- iOS UNLOCK SEQUENCE ---
-    // 1. Create context immediately (synchronously)
+    // iOS Unlock
     if (!audioContext) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
     }
-
-    // 2. Force resume immediately
     if (audioContext.state === 'suspended') {
         await audioContext.resume();
     }
-
-    // 3. Play a silent "dummy" note instantly
-    // This tells iOS "Yes, the user really wants audio right now"
+    // Silent buffer to force audio hardware
     const buffer = audioContext.createBuffer(1, 1, 22050);
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
     source.connect(audioContext.destination);
     source.start(0);
-    // --- END iOS UNLOCK ---
 
-    // Now safe to init MIDI and start
+    // Request Screen Stay Awake
+    requestWakeLock();
+
     init(); 
 
     // Parse chords
@@ -388,7 +393,9 @@ document.getElementById('btn-play').addEventListener('click', async () => {
     chordProgression = rawText.split(/\s+/).map(c => parseChord(c));
 
     isPlaying = true;
-    currentStep = 0;
+    
+    // Start with 1 bar of Count-In (-16 steps)
+    currentStep = -16;
     currentChordIndex = 0;
     
     // Start slightly in the future
@@ -400,15 +407,17 @@ document.getElementById('btn-play').addEventListener('click', async () => {
 document.getElementById('btn-stop').addEventListener('click', () => {
     isPlaying = false;
     cancelAnimationFrame(timerID);
+    releaseWakeLock(); // Let phone sleep again
+    
     lcdChord.innerText = "--";
     beatLed.className = "beat-indicator";
     
-    // Panic button for MIDI (Kill all sound)
+    // Panic button
     if(midiOutput) {
         for(let i=0; i<127; i++) {
-            midiOutput.send([0x89, i, 0]); // Ch 10 Note Off
-            midiOutput.send([0x8A, i, 0]); // Ch 11 Note Off
-            midiOutput.send([0x8B, i, 0]); // Ch 12 Note Off
+            midiOutput.send([0x89, i, 0]); 
+            midiOutput.send([0x8A, i, 0]); 
+            midiOutput.send([0x8B, i, 0]); 
         }
     }
 });
