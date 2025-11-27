@@ -173,13 +173,48 @@ function playInternalKeys(freq, time, duration) {
 const NOTES = { 'C':0, 'C#':1, 'Db':1, 'D':2, 'D#':3, 'Eb':3, 'E':4, 'F':5, 'F#':6, 'Gb':6, 'G':7, 'G#':8, 'Ab':8, 'A':9, 'A#':10, 'Bb':10, 'B':11 };
 
 function parseChord(chordStr) {
-    let root = (chordStr.length > 1 && (chordStr[1] === '#' || chordStr[1] === 'b')) ? chordStr.substring(0, 2) : chordStr.substring(0, 1);
-    let quality = (chordStr.includes('m') && !chordStr.includes('maj')) ? 'min' : 'maj';
-    let rootVal = NOTES[root] || 0;
-    let intervals = (quality === 'min') ? [0, 3, 7] : [0, 4, 7];
-    return { name: chordStr, rootVal: rootVal, intervals: intervals };
-}
+    // 1. Identify Root Length (1 or 2 chars, e.g. "C" or "F#")
+    let rootLen = 1;
+    if (chordStr.length > 1) {
+        const c2 = chordStr[1];
+        // Check for sharp (#) or flat (b/B)
+        if (c2 === '#' || c2.toLowerCase() === 'b') { 
+            rootLen = 2;
+        }
+    }
 
+    // 2. Normalize the Root (Force "a" -> "A", "bb" -> "Bb")
+    let rootRaw = chordStr.substring(0, rootLen);
+    let rootKey = rootRaw.charAt(0).toUpperCase();
+    if (rootLen > 1) {
+        rootKey += rootRaw.charAt(1).toLowerCase(); // Ensures "b" is lower for flat
+    }
+
+    // 3. Lookup Root Value
+    let rootVal = NOTES[rootKey];
+    if (rootVal === undefined) {
+        // Fallback for typos, just plays C so it doesn't crash
+        rootVal = 0; 
+    }
+
+    // 4. Determine Quality (Major/Minor)
+    // Check the REST of the string for 'm'
+    let extension = chordStr.substring(rootLen).toLowerCase();
+    let quality = 'maj';
+    
+    // If it contains 'm' (and not 'maj'), it is Minor
+    if (extension.includes('m') && !extension.includes('maj')) {
+        quality = 'min';
+    }
+
+    // 5. Build Clean Display Name (e.g. "Am", "F#m")
+    // This fixes the lowercase display issue in the black box
+    let displayName = rootKey + extension;
+
+    let intervals = (quality === 'min') ? [0, 3, 7] : [0, 4, 7];
+    
+    return { name: displayName, rootVal: rootVal, intervals: intervals };
+}
 function mtof(noteNumber) {
     return 440 * Math.pow(2, (noteNumber - 69) / 12);
 }
