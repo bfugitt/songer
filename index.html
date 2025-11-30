@@ -25,10 +25,16 @@
             </div>
 
             <div class="control-group">
-                <div class="lcd-display">
-                    <span id="current-chord-display">--</span>
-                    <span class="beat-indicator" id="beat-led">●</span>
-                </div>
+<div class="lcd-display">
+    <div class="chord-readout">
+        <span id="lcd-current">--</span>
+        <span id="lcd-next-container" class="dimmed-text">
+            <span class="arrow">→</span>
+            <span id="lcd-next">--</span>
+        </span>
+    </div>
+    <span class="beat-indicator" id="beat-led">●</span>
+</div>
                 
                 <div class="button-row">
                     <button class="btn" id="btn-play">▶ Play</button>
