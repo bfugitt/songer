@@ -1,7 +1,7 @@
-// --- SYSTEM 6: MIDI BROADCAST ENGINE ---
+// --- SYSTEM 6: MIDI BROADCAST + NEXT CHORD DISPLAY ---
 
 // State
-let midiOutputs = []; // Changed from single output to Array
+let midiOutputs = []; 
 let isPlaying = false;
 let currentStep = 0; 
 let nextNoteTime = 0.0;
@@ -20,7 +20,9 @@ const STEPS_PER_BAR = 16;
 const bpmInput = document.getElementById('bpm-input');
 const chordInput = document.getElementById('chord-input');
 const statusDiv = document.getElementById('status-bar');
-const lcdChord = document.getElementById('current-chord-display');
+// Updated DOM elements for split display
+const lcdCurrent = document.getElementById('lcd-current');
+const lcdNext = document.getElementById('lcd-next');
 const beatLed = document.getElementById('beat-led');
 
 // --- 1. INITIALIZATION & WAKE LOCK ---
@@ -33,19 +35,15 @@ async function init() {
     if (navigator.requestMIDIAccess) {
         try {
             const access = await navigator.requestMIDIAccess();
-            
-            // --- UPDATED: COLLECT ALL OUTPUTS ---
             midiOutputs = Array.from(access.outputs.values());
             
             if(midiOutputs.length > 0) {
-                // List device names in the status bar
                 const names = midiOutputs.map(o => o.name).join(", ");
                 statusDiv.innerText = `Connected (${midiOutputs.length}): ${names}`;
                 statusDiv.className = 'status-connected';
             } else {
                 statusDiv.innerText = "No MIDI Devices Found";
             }
-            
         } catch (err) {
             console.log("MIDI Access Refused");
         }
@@ -208,28 +206,29 @@ function getMidiTime(audioTime) {
     return performance.now() + (audioTime - audioContext.currentTime) * 1000;
 }
 
-// --- UPDATED: SEND TO ALL DEVICES ---
 function triggerKeyNote(note, time, duration, mode) {
     if (mode === 'midi' && midiOutputs.length > 0) {
         const timestamp = getMidiTime(time);
-        
-        // Loop through ALL connected devices and send
         midiOutputs.forEach(output => {
             output.send([0x9B, note, 90], timestamp);
             output.send([0x8B, note, 0], timestamp + (duration * 1000));
         });
-
     } else if (mode === 'internal') {
         playInternalKeys(mtof(note), time, duration);
     }
 }
 
-function scheduleVisualUpdate(time, chordName, stepIndex) {
+// --- UPDATED: VISUAL SYNC ---
+function scheduleVisualUpdate(time, currentName, nextName, stepIndex) {
     const delay = (time - audioContext.currentTime) * 1000;
     setTimeout(() => {
-        if (stepIndex === 0) lcdChord.innerText = chordName;
-        else if (stepIndex < 0) lcdChord.innerText = "--";
-        
+        // Update Chords only on the downbeat (or count-in start)
+        if (stepIndex === 0 || (stepIndex < 0 && stepIndex % 4 === 0)) {
+            lcdCurrent.innerText = currentName;
+            lcdNext.innerText = nextName;
+        }
+
+        // Beat LED
         if (Math.abs(stepIndex) % 4 === 0) {
             beatLed.className = "beat-indicator beat-active";
         } else {
@@ -251,17 +250,29 @@ const DRUM_PATTERNS = {
 
 function playStep(time) {
     const mode = document.querySelector('input[name="audioMode"]:checked').value;
-    
     const capturedStep = currentStep;
-    let capturedChordName = "--";
-    let currentChord = null;
+    
+    // --- DETERMINE DISPLAY NAMES ---
+    let displayCurrent = "--";
+    let displayNext = "--";
+
     if (chordProgression.length > 0) {
-        currentChord = chordProgression[currentChordIndex % chordProgression.length];
-        capturedChordName = currentChord.name;
+        if (capturedStep < 0) {
+            // Count-in: Current is empty, Next is First Chord
+            displayCurrent = "--";
+            displayNext = chordProgression[0].name;
+        } else {
+            // Normal Play: Current is Now, Next is upcoming
+            // Use modulo math to wrap around the array
+            displayCurrent = chordProgression[currentChordIndex % chordProgression.length].name;
+            displayNext = chordProgression[(currentChordIndex + 1) % chordProgression.length].name;
+        }
     }
 
-    scheduleVisualUpdate(time, capturedChordName, capturedStep);
+    // Schedule Visuals
+    scheduleVisualUpdate(time, displayCurrent, displayNext, capturedStep);
 
+    // --- COUNT-IN CLICK ---
     if (capturedStep < 0) {
         const relativeStep = capturedStep + 16;
         if (relativeStep % 4 === 0) {
@@ -270,7 +281,8 @@ function playStep(time) {
         return;
     }
 
-    if (!currentChord) return;
+    if (chordProgression.length === 0) return;
+    const currentChord = chordProgression[currentChordIndex % chordProgression.length];
 
     const dStyle = document.getElementById('drum-pattern').value;
     const bStyle = document.getElementById('bass-pattern').value;
@@ -284,7 +296,6 @@ function playStep(time) {
     if (hit > 0) {
         if (mode === 'midi' && midiOutputs.length > 0) {
             let note = (hit===1 ? 36 : hit===2 ? 38 : 42);
-            // Broadcast
             midiOutputs.forEach(output => {
                 output.send([0x99, note, 100], midiTime);
                 output.send([0x89, note, 0], midiTime + 50);
@@ -313,7 +324,6 @@ function playStep(time) {
 
     if (bStyle !== 'mute' && playBass) {
         if (mode === 'midi' && midiOutputs.length > 0) {
-            // Broadcast
             midiOutputs.forEach(output => {
                 output.send([0x9A, rootNote, 100], midiTime);
                 output.send([0x8A, rootNote, 0], midiTime + 200);
@@ -410,10 +420,11 @@ document.getElementById('btn-stop').addEventListener('click', () => {
     cancelAnimationFrame(timerID);
     releaseWakeLock(); 
     
-    lcdChord.innerText = "--";
+    lcdCurrent.innerText = "--";
+    lcdNext.innerText = "--";
     beatLed.className = "beat-indicator";
     
-    // MIDI Panic - Send to all devices
+    // MIDI Panic
     if(midiOutputs.length > 0) {
         midiOutputs.forEach(output => {
             for(let i=0; i<127; i++) {
