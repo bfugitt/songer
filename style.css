@@ -131,3 +131,27 @@ input[type="text"] { width: 100%; box-sizing: border-box; font-size: 24px; text-
     text-align: center;
     font-size: 16px;
 }
+
+/* LCD Updates */
+.chord-readout {
+    display: flex;
+    align-items: baseline;
+    gap: 15px; /* Space between current and next */
+    width: 100%;
+}
+
+#lcd-current {
+    font-weight: bold;
+    min-width: 60px; /* Prevents jumping */
+}
+
+.dimmed-text {
+    opacity: 0.4; /* The "Dim" Effect */
+    font-size: 0.8em; /* Slightly smaller */
+    color: #33ff33;
+}
+
+.arrow {
+    margin-right: 5px;
+}
+
